@@ -1,11 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 class ErrorKind:
     VALIDATION="validation"; NOT_FOUND="not_found"; FORBIDDEN="forbidden"; CONFLICT="conflict"
 class DomainError(Exception):
     kind=ErrorKind.VALIDATION
-    def __init__(self,message): super().__init__(message); self.message=message
+    def __init__(self,message,details=None):
+        super().__init__(message); self.message=message; self.details=details
 class ValidationError(DomainError): kind=ErrorKind.VALIDATION
 class NotFoundError(DomainError): kind=ErrorKind.NOT_FOUND
 class PermissionDenied(DomainError): kind=ErrorKind.FORBIDDEN
@@ -36,3 +38,14 @@ def require_number(value,field,minimum=0.0):
     return number
 def ensure_role(role,allowed):
     if role not in allowed: raise PermissionDenied("当前角色无权执行该操作")
+def parse_utc(value,field):
+    """解析计划时间，接受UTC ISO8601或'YYYY-MM-DDTHH:MM'（按UTC处理），返回秒级UTC ISO字符串。"""
+    if not isinstance(value,str) or not value.strip(): raise ValidationError(f"{field}不能为空")
+    text=value.strip()
+    try:
+        if text.endswith(('Z','z')): text=text[:-1]+'+00:00'
+        dt=datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValidationError(f"{field}必须是ISO8601时间") from exc
+    if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()

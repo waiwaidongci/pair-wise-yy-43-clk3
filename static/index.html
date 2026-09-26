@@ -1,1 +1,162 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>溢油应急响应与任务追踪</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#17212b}pre{background:#f4f7f9;padding:1rem;overflow:auto}button{padding:.55rem 1rem}</style></head><body><h1>溢油应急响应与任务追踪</h1><p>围控、回收、岸线保护和废弃物处置任务，按证据和监测结果闭环</p><p>估算油量、海况和未完成任务数影响响应等级；关闭前必须完成回收和岸线监测记录。</p><button onclick="loadItems()">刷新列表</button><pre id="out">使用X-Actor和X-Role请求头调用接口。</pre><script>async function loadItems(){const r=await fetch('/api/items',{headers:{'X-Actor':'demo','X-Role':'viewer'}});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>溢油应急响应与调派台账</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;max-width:1100px;margin:1.5rem auto;padding:0 1rem;color:#17212b}
+h1{font-size:1.4rem} h2{font-size:1.1rem;margin-top:2rem}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.9rem}
+th,td{border:1px solid #d6dee4;padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:#f4f7f9}
+.badge{display:inline-block;padding:.1rem .5rem;border-radius:10px;font-size:.78rem}
+.busy{background:#fdecea;color:#b3261e}.free{background:#e6f4ea;color:#1e7a34}
+.cross{background:#fef7e0;color:#9a6b00}
+form{background:#f4f7f9;padding:.8rem;margin:.6rem 0;border-radius:6px}
+label{display:inline-block;margin:.25rem .8rem .25rem 0;font-size:.85rem}
+input,select,textarea{font:inherit;padding:.3rem .45rem;margin-top:.2rem;border:1px solid #c3cdd4;border-radius:4px}
+button{padding:.45rem .9rem;font:inherit;border:0;border-radius:4px;background:#1a5fb4;color:#fff;cursor:pointer}
+button.ghost{background:#e9eef2;color:#17212b}
+button:disabled{opacity:.5;cursor:default}
+.msg{white-space:pre-wrap;background:#f4f7f9;padding:.8rem;border-radius:6px;font-size:.85rem;max-height:240px;overflow:auto}
+.row{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<h1>溢油应急响应与调派台账</h1>
+<p>围控船、回收组、监测人员按呼号唯一登记；同一资源同一时段只能执行一个事件，跨区域调派立即释放原值守区域，撤收后才可改派。</p>
+<div class="row">
+  <button onclick="loadAll()">刷新</button>
+  <label>身份 X-Actor <input id="actor" value="demo" size="10"></label>
+  <label>角色 X-Role
+    <select id="role">
+      <option>response_commander</option>
+      <option>operations</option>
+      <option>observer</option>
+      <option>viewer</option>
+    </select>
+  </label>
+</div>
+
+<h2>事件与当前占用</h2>
+<table id="itemsTable">
+  <thead><tr><th>#</th><th>标题</th><th>状态</th><th>在岗资源</th><th>操作</th></tr></thead>
+  <tbody><tr><td colspan="5">点击“刷新”加载。</td></tr></tbody>
+</table>
+
+<h2>资源台账</h2>
+<table id="resTable">
+  <thead><tr><th>呼号</th><th>类型</th><th>归属区域</th><th>当前值守区域</th><th>占用情况</th><th>操作</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>登记资源</h2>
+<form id="resForm" class="row">
+  <label>呼号<input name="callsign" required size="10"></label>
+  <label>类型<select name="resource_type">
+    <option value="containment_vessel">围控船</option>
+    <option value="recovery_team">回收组</option>
+    <option value="monitoring_personnel">监测人员</option>
+  </select></label>
+  <label>值守区域<input name="home_area" required size="10"></label>
+  <button type="submit">登记</button>
+</form>
+
+<h2>调派资源到事件</h2>
+<form id="dispatchForm">
+  <div class="row">
+    <label>事件 #<input name="item_id" required size="6"></label>
+    <label>呼号<input name="callsign" required size="10"></label>
+    <label>任务区域<input name="work_area" required size="10"></label>
+    <label>负责人<input name="person_in_charge" required size="10"></label>
+    <label>幂等号(可选)<input name="external_ref" size="12"></label>
+  </div>
+  <div class="row">
+    <label>计划开始<input name="planned_start" required placeholder="2026-09-26T08:00Z" size="20"></label>
+    <label>计划结束<input name="planned_end" required placeholder="2026-09-26T18:00Z" size="20"></label>
+  </div>
+  <label>现场任务</label><br>
+  <textarea name="task" rows="2" cols="60" required></textarea><br><br>
+  <button type="submit">调派</button>
+</form>
+
+<h2>事件调派台账（含历史）</h2>
+<div class="row">
+  <label>事件 #<input id="ledgerItemId" size="6"></label>
+  <button onclick="loadLedger()">查台账</button>
+</div>
+<table id="ledgerTable">
+  <thead><tr><th>#</th><th>呼号/类型</th><th>状态</th><th>负责人</th><th>现场任务</th><th>区域</th><th>计划起止</th><th>实际用时(分)</th><th>操作</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<pre id="msg" class="msg"></pre>
+
+<script>
+const $=s=>document.querySelector(s);
+function headers(extra){return Object.assign({'X-Actor':$('#actor').value||'demo','X-Role':$('#role').value||'viewer','Content-Type':'application/json'},extra||{})}
+function esc(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function show(v){$('#msg').textContent=typeof v==='string'?v:JSON.stringify(v,null,2)}
+async function api(method,url,body){
+  const opt={method,headers:headers()}; if(body)opt.body=JSON.stringify(body);
+  const r=await fetch(url,opt), data=await r.json().catch(()=>({}));
+  if(!r.ok)throw Object.assign(new Error(data.message||r.statusText),{data});
+  return data;
+}
+async function loadAll(){
+  try{
+    const [items,res]=await Promise.all([api('GET','/api/items'),api('GET','/api/resources')]);
+    const ib=$('#itemsTable tbody');
+    ib.innerHTML=items.items.map(i=>`<tr>
+      <td>${i.id}</td><td>${esc(i.title)}</td><td>${esc(i.status)}</td>
+      <td>${i.active_resource_count? `<span class="badge busy">在岗 ${i.active_resource_count}</span> ${esc(i.active_callsigns.join('、'))}`:'<span class="badge free">无占用</span>'}</td>
+      <td><button class="ghost" onclick="$('#ledgerItemId').value=${i.id};loadLedger()">台账</button>
+          <button class="ghost" onclick="document.querySelector('[name=item_id]').value=${i.id}">调派到本单</button></td>
+    </tr>`).join('');
+    $('#resTable tbody').innerHTML=res.resources.map(r=>`<tr>
+      <td>${esc(r.callsign)}</td><td>${esc(r.resource_type_label)}</td><td>${esc(r.home_area)}</td>
+      <td>${r.occupied? `<span class="badge cross">${esc(r.current_area)}</span>`:esc(r.current_area)}</td>
+      <td>${r.occupied? `<span class="badge busy">事件 #${r.current_item_id}（调派 ${r.current_assignment_id}）</span>`:'<span class="badge free">空闲</span>'}</td>
+      <td>${r.occupied?`<button class="ghost" onclick="quickRelease(${r.current_assignment_id})">撤收</button>`:''}</td>
+    </tr>`).join('');
+    show(`已加载 ${items.items.length} 个事件、${res.resources.length} 个资源。`);
+  }catch(e){show(e.data||e.message)}
+}
+async function quickRelease(id){
+  const mins=prompt('实际用时（分钟），留空按调派时间自动计算','');
+  if(mins===null)return;
+  try{const body=mins===''?{}:{actual_minutes:Number(mins)}; const r=await api('POST',`/api/assignments/${id}/release`,body);
+    show(`已撤收调派 #${r.id}，实际用时 ${r.actual_minutes} 分钟。`); await loadAll();
+  }catch(e){show(e.data||e.message)}
+}
+async function loadLedger(){
+  const id=$('#ledgerItemId').value.trim(); if(!id)return show('请输入事件编号');
+  try{const data=await api('GET',`/api/items/${encodeURIComponent(id)}/assignments`);
+    $('#ledgerTable tbody').innerHTML=data.assignments.length?data.assignments.map(a=>`<tr>
+      <td>${a.id}</td><td>${esc(a.callsign)}<br>${esc(a.resource_type_label)}</td>
+      <td>${a.status==='active'?'<span class="badge busy">在岗</span>':'<span class="badge free">已撤收</span>'}</td>
+      <td>${esc(a.person_in_charge)}</td><td>${esc(a.task)}</td>
+      <td>${esc(a.work_area)}${a.cross_area?' <span class="badge cross">跨区</span>':''}</td>
+      <td>${esc(a.planned_start)}<br>${esc(a.planned_end)}</td>
+      <td>${a.actual_minutes??''}</td>
+      <td>${a.status==='active'?`<button class="ghost" onclick="quickRelease(${a.id})">撤收</button>`:''}</td>
+    </tr>`).join(''):'<tr><td colspan="9">该事件暂无调派。</td></tr>';
+  }catch(e){show(e.data||e.message)}
+}
+$('#resForm').addEventListener('submit',async e=>{e.preventDefault();
+  const fd=new FormData(e.target),body=Object.fromEntries(fd);
+  try{const r=await api('POST','/api/resources',body);show(`已登记资源 ${r.callsign}（${r.resource_type_label}）`);e.target.reset();await loadAll();}
+  catch(err){show(err.data||err.message)}});
+$('#dispatchForm').addEventListener('submit',async e=>{e.preventDefault();
+  const fd=new FormData(e.target),body=Object.fromEntries(fd);
+  const id=body.item_id; delete body.item_id;
+  if(!body.external_ref)delete body.external_ref;
+  try{const r=await api('POST',`/api/items/${encodeURIComponent(id)}/assignments`,body);
+    show(`调派 #${r.id} 已建立：${r.callsign} → 事件 #${id}（${r.work_area}${r.cross_area?'，跨区调派原区域已释放':''}）`);
+    await loadAll(); $('#ledgerItemId').value=id; loadLedger();
+  }catch(err){show(err.data||err.message)}});
+loadAll();
+</script>
+</body>
+</html>

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from .audit import make_entry, utc_now
 from .domain import ConflictError, NotFoundError
-from .rules import ID_PREFIX, STATES
+from .rules import (ASSIGNMENT_STATES, ID_PREFIX, RESOURCE_TYPES, STATES)
 
 
 class Repository:
@@ -24,6 +24,8 @@ class Repository:
 
     def _create_schema(self) -> None:
         statuses = ",".join("'" + s.replace("'", "''") + "'" for s in STATES)
+        rtypes = ",".join("'" + t.replace("'", "''") + "'" for t in RESOURCE_TYPES)
+        astates = ",".join("'" + s.replace("'", "''") + "'" for s in ASSIGNMENT_STATES)
         with self.conn:
             self.conn.executescript(f"""
                 CREATE TABLE IF NOT EXISTS items (
@@ -54,6 +56,39 @@ class Repository:
                     created_at TEXT NOT NULL,
                     UNIQUE(item_id, external_ref)
                 );
+                CREATE TABLE IF NOT EXISTS resources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callsign TEXT NOT NULL UNIQUE,
+                    resource_type TEXT NOT NULL CHECK(resource_type IN ({rtypes})),
+                    home_area TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    resource_id INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ({astates})),
+                    home_area TEXT NOT NULL,
+                    work_area TEXT NOT NULL,
+                    cross_area INTEGER NOT NULL DEFAULT 0,
+                    person_in_charge TEXT NOT NULL,
+                    task TEXT NOT NULL,
+                    planned_start TEXT NOT NULL,
+                    planned_end TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    released_by TEXT,
+                    released_at TEXT,
+                    actual_minutes INTEGER,
+                    release_note TEXT,
+                    external_ref TEXT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_resource_active_assignment
+                    ON assignments(resource_id) WHERE status='active';
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_assignment_external_ref
+                    ON assignments(external_ref) WHERE external_ref IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS ix_assignments_item ON assignments(item_id);
                 CREATE TABLE IF NOT EXISTS audit_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     action TEXT NOT NULL,
@@ -156,6 +191,137 @@ class Repository:
                 (item_id,),
             ).fetchone()
         return int(row["n"])
+
+    def create_resource(self, callsign: str, resource_type: str, home_area: str,
+                        actor: str) -> Dict[str, Any]:
+        now = utc_now()
+        try:
+            with self._lock, self.conn:
+                cur = self.conn.execute(
+                    """INSERT INTO resources(callsign, resource_type, home_area,
+                       created_by, created_at) VALUES(?,?,?,?,?)""",
+                    (callsign, resource_type, home_area, actor, now),
+                )
+                resource_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("呼号已存在") from exc
+        return self.get_resource(resource_id)
+
+    def get_resource(self, resource_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM resources WHERE id=?", (resource_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("资源不存在")
+        return dict(row)
+
+    def get_resource_by_callsign(self, callsign: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM resources WHERE callsign=?", (callsign,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_resources(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM resources ORDER BY callsign"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_assignment(self, resource_id: int, item_id: int, work_area: str,
+                          cross_area: bool, person_in_charge: str, task: str,
+                          planned_start: str, planned_end: str, actor: str,
+                          external_ref: Optional[str]) -> Dict[str, Any]:
+        home_area = self.get_resource(resource_id)["home_area"]
+        now = utc_now()
+        with self._lock, self.conn:
+            busy = self.conn.execute(
+                "SELECT 1 FROM assignments WHERE resource_id=? AND status='active'",
+                (resource_id,),
+            ).fetchone()
+            if busy is not None:
+                raise ConflictError("该资源尚未撤收，不能改派", {
+                    "reason": "resource_not_released",
+                    "resource_id": resource_id,
+                })
+            try:
+                cur = self.conn.execute(
+                    """INSERT INTO assignments(resource_id, item_id, status, home_area,
+                       work_area, cross_area, person_in_charge, task, planned_start,
+                       planned_end, created_by, created_at, external_ref)
+                       VALUES(?,?, 'active', ?,?,?,?,?,?,?,?,?,?)""",
+                    (resource_id, item_id, home_area, work_area,
+                     1 if cross_area else 0, person_in_charge, task, planned_start,
+                     planned_end, actor, now, external_ref),
+                )
+                assignment_id = int(cur.lastrowid)
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("调派唯一标识已存在") from exc
+        return self.get_assignment(assignment_id)
+
+    def get_assignment(self, assignment_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM assignments WHERE id=?", (assignment_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("调派记录不存在")
+        return dict(row)
+
+    def list_assignments(self, item_id: Optional[int] = None,
+                         status: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM assignments"
+        clauses, params = [], []
+        if item_id is not None:
+            clauses.append("item_id=?"); params.append(item_id)
+        if status is not None:
+            clauses.append("status=?"); params.append(status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC"
+        with self._lock:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def active_assignments_for_item(self, item_id: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT a.*, r.callsign AS callsign, r.resource_type AS resource_type
+                   FROM assignments a JOIN resources r ON r.id=a.resource_id
+                   WHERE a.item_id=? AND a.status='active' ORDER BY a.id""",
+                (item_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def all_active_assignments(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT a.*, r.callsign AS callsign, r.resource_type AS resource_type
+                   FROM assignments a JOIN resources r ON r.id=a.resource_id
+                   WHERE a.status='active'"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def release_assignment(self, assignment_id: int, actor: str,
+                           actual_minutes: int, note: Optional[str]) -> Dict[str, Any]:
+        now = utc_now()
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                """UPDATE assignments SET status='released', released_by=?,
+                   released_at=?, actual_minutes=?, release_note=?
+                   WHERE id=? AND status='active'""",
+                (actor, now, actual_minutes, note, assignment_id),
+            )
+            if cur.rowcount == 0:
+                exists = self.conn.execute(
+                    "SELECT 1 FROM assignments WHERE id=?", (assignment_id,)
+                ).fetchone()
+                if exists is None:
+                    raise NotFoundError("调派记录不存在")
+                raise ConflictError("调派记录已撤收，不能重复撤收")
+        return self.get_assignment(assignment_id)
 
     def append_audit(self, action: str, entity_type: str, entity_id: int,
                      actor: str, detail: dict) -> Dict[str, Any]:
