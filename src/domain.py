@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 class ErrorKind:
     VALIDATION="validation"; NOT_FOUND="not_found"; FORBIDDEN="forbidden"; CONFLICT="conflict"
@@ -11,12 +12,19 @@ class NotFoundError(DomainError): kind=ErrorKind.NOT_FOUND
 class PermissionDenied(DomainError): kind=ErrorKind.FORBIDDEN
 class ConflictError(DomainError): kind=ErrorKind.CONFLICT
 SEVERITIES=['minor', 'moderate', 'major', 'catastrophic']; STATES=['reported', 'assessing', 'containing', 'recovering', 'monitoring', 'closed']; ROLES=['observer', 'response_commander', 'operations', 'viewer']
+RESOURCE_KINDS=['containment_vessel', 'recovery_team', 'monitoring', 'shoreline_protection', 'waste_disposal']; ASSIGNMENT_STATES=['active', 'released']
 @dataclass(frozen=True)
 class Item:
     id:int; title:str; description:str; severity:str; quantity:float; threshold:float; status:str; version:int; external_ref:Optional[str]; created_by:str; created_at:str; updated_at:str
 @dataclass(frozen=True)
 class Record:
     id:int; item_id:int; kind:str; detail:str; status:str; external_ref:Optional[str]; created_by:str; created_at:str
+@dataclass(frozen=True)
+class Resource:
+    id:int; call_sign:str; kind:str; home_area:str; created_by:str; created_at:str
+@dataclass(frozen=True)
+class Assignment:
+    id:int; item_id:int; resource_id:int; area:str; leader:str; task:str; planned_start:str; planned_end:str; status:str; released_at:Optional[str]; actual_hours:Optional[float]; external_ref:Optional[str]; created_by:str; created_at:str
 @dataclass(frozen=True)
 class AuditEntry:
     id:int; action:str; entity_type:str; entity_id:int; actor:str; detail:Dict[str,Any]; previous_hash:str; entry_hash:str; created_at:str
@@ -28,6 +36,17 @@ def require_text(value,field,max_length=2000):
 def normalize_severity(value):
     if value not in SEVERITIES: raise ValidationError("severity不在允许范围内")
     return value
+def normalize_resource_kind(value):
+    if value not in RESOURCE_KINDS: raise ValidationError("kind不在允许范围内")
+    return value
+def require_timestamp(value,field):
+    if not isinstance(value,str) or not value.strip(): raise ValidationError(f"{field}不能为空")
+    text=value.strip()
+    if text.endswith(("Z","z")): text=text[:-1]+"+00:00"
+    try: parsed=datetime.fromisoformat(text)
+    except ValueError: raise ValidationError(f"{field}必须是ISO 8601时间格式")
+    if parsed.tzinfo is None: parsed=parsed.replace(tzinfo=timezone.utc)
+    return parsed
 def require_number(value,field,minimum=0.0):
     if isinstance(value,bool): raise ValidationError(f"{field}必须是数字")
     try: number=float(value)

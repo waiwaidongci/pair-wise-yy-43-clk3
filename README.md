@@ -30,9 +30,16 @@ python3 app.py --db ./data.db --port 8320
 - `GET /api/items/{id}`
 - `POST /api/items/{id}/records`
 - `POST /api/items/{id}/transition`，必须提交`expected_version`
+- `GET /api/resources`，`POST /api/resources`
+- `GET /api/items/{id}/assignments`，`POST /api/items/{id}/assignments`
+- `POST /api/assignments/{id}/release`
 - `GET /api/audit`
 
 允许角色：observer, response_commander, operations, viewer。估算油量、海况和未完成任务数影响响应等级；关闭前必须完成回收和岸线监测记录。
+
+## 调派台账
+
+资源以唯一呼号登记并绑定值守区域；调派记录负责人、计划起止和现场任务，撤收时写明实际用时。同一资源同一时段只能执行一个事件，未撤收不能改派；跨区域调派时原值守区域立即释放。事件关闭前仍有资源在岗会返回冲突并列出未撤收呼号；历史调派保留，重复调派（相同`external_ref`）不会写入半条记录。
 
 ## 测试
 
